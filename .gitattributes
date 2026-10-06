@@ -1,0 +1,4 @@
+* text=auto eol=lf
+*.bend text
+*.png binary
+*.ttf binary
