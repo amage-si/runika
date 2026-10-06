@@ -172,20 +172,36 @@ def cmap_hit(hit: Bool, +v: B.View, code: U32, start: U32, delta: U32, +range: U
     case True{}:
       cmap_glyph(U32.is_eq(range, 0), v, code, start, delta, range, at)
 
+# The glyph of `code` in segment i, or 0 when the segment starts after it
+# (code falls between segments).
+def cmap_segment(+v: B.View, +count: U32, +i: U32, +code: U32) -> Result<&2, &2, String, U32>:
+  do Result<&2, &2, String, U32>:
+    +start : U32 <- B.u16(v, (16 + (count * 2) + (i * 2) : U32))
+    delta : U32 <- B.u16(v, (16 + (count * 4) + (i * 2) : U32))
+    +at : U32 = (16 + (count * 6) + (i * 2) : U32)
+    range : U32 <- B.u16(v, at)
+    cmap_hit(U32.is_le(start, code), v, code, start, delta, range, at, 0)
+
+def cmap_next(here: Bool, found: Unit -> Result<&2, &2, String, U32>,
+  later: Unit -> Result<&2, &2, String, U32>) -> Result<&2, &2, String, U32>:
+  match here:
+    case True{}:
+      found(Unit{})
+    case False{}:
+      later(Unit{})
+
+# Segments are sorted by end and do not overlap (cmap_validate checks it
+# when the font is loaded), so the segment for `code` is the first one that
+# ends at or after it: stop there instead of reading every segment.
 def cmap_scan(n: Nat, +v: B.View, +count: U32, +i: U32, +code: U32) -> Result<&2, &2, String, U32>:
   match n:
     case 0n:
       Done{0}
     case 1n+p:
       do Result<&2, &2, String, U32>:
-        +end : U32 <- B.u16(v, (14 + (i * 2) : U32))
-        +start : U32 <- B.u16(v, (16 + (count * 2) + (i * 2) : U32))
-        delta : U32 <- B.u16(v, (16 + (count * 4) + (i * 2) : U32))
-        +at : U32 = (16 + (count * 6) + (i * 2) : U32)
-        range : U32 <- B.u16(v, at)
-        ok : Unit <- B.require(U32.is_le(start, end), "invalid cmap segment range")
-        tail : U32 <- cmap_scan(p, v, count, (i + 1 : U32), code)
-        cmap_hit(Bool.and(U32.is_ge(code, start), U32.is_le(code, end)), v, code, start, delta, range, at, tail)
+        end : U32 <- B.u16(v, (14 + (i * 2) : U32))
+        cmap_next(U32.is_ge(end, code), u => cmap_segment(v, count, i, code),
+          u => cmap_scan(p, v, count, (i + 1 : U32), code))
 
 def glyph_id(font: Font, +code: U32) -> Result<&2, &2, String, U32>:
   match font:
