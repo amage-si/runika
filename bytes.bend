@@ -82,15 +82,20 @@ def slice(v: View, +off: U32, +count: U32) -> Result<&2, &2, String, View>:
         ok : Unit <- require(in_range(len, off, count), "table/record range outside buffer")
         return View{tree, depth, (start + off : U32), count}
 
-def lookup(+d: Nat, tree: Tree, +i: U32) -> U32:
+# A node at depth 1n+p splits its bytes at 2^p. `half` carries that split
+# down the tree, halved at each level, so a read costs O(depth) instead of
+# computing U32.pow(2, p) (p multiplications) at every level.
+def lookup.go(+d: Nat, tree: Tree, +i: U32, +half: U32) -> U32:
   match d tree:
     case _ Byte{v}:
       v
     case 0n Fork{lo, hi}:
       0
     case 1n+p Fork{lo, hi}:
-      +half = U32.pow(2, p)
-      lookup(p, Bool.pick(Tree, U32.is_lt(i, half), lo, hi), U32.mod(i, half))
+      lookup.go(p, Bool.pick(Tree, U32.is_lt(i, half), lo, hi), U32.mod(i, half), (half / 2 : U32))
+
+def lookup(+d: Nat, tree: Tree, +i: U32) -> U32:
+  lookup.go(d, tree, i, U32.pow(2, Nat.sub(d, 1n)))
 
 def byte(v: View, +off: U32) -> Result<&2, &2, String, U32>:
   match v:
