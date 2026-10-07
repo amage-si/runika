@@ -28,11 +28,21 @@ on the development machine. It is not a complete OpenType implementation.
   `Line`, `Quad`, `ClosePath`, `NonZero` fill. Implied on-curve points between
   consecutive quadratic controls are computed in Bend. Each contour is closed
   explicitly, in font order.
+- A Latin-1 table built with every font: for U+0000..U+00FF (the scalars Syllo
+  lays out) the glyph and advance the `cmap` and `hmtx` give, computed once at
+  parse time. `F.info` and `F.glyph_id` answer those characters in eight steps
+  instead of a `cmap` search and an `hmtx` read, with the same results and
+  errors (a character the font could not answer goes through the tables).
+- The file's identity (`head` checkSumAdjustment) for caches of derived data.
 
-The native suite has **51 checks**: truncated and out-of-range input, offset
-and slice overflow, malformed directories and `loca`, flag repeats, composite
-cycles, signed composite arguments with F2Dot14 scale, `cmap` glyph-array edge
-cases, and reference values from Liberation Sans.
+The native suite has **58 checks**: truncated and out-of-range input, offset
+and slice overflow, every byte/u16/u32 read at every offset and alignment of
+small buffers, every table checksum of Liberation Sans against its directory
+(each word of the file read through the byte tree), malformed directories and
+`loca`, flag repeats, composite cycles, signed composite arguments with
+F2Dot14 scale, `cmap` glyph-array edge cases, the Latin-1 table answering
+exactly as the tables do (U+0000 to U+012B), its rebuild after a `cmap` is
+replaced, and reference values from Liberation Sans.
 
 Outside the suite, `tools/` compares Runika against **fontTools 4.66.1**: all
 191 characters of ASCII 32–126 and Latin-1 160–255 in Liberation Sans
@@ -86,7 +96,9 @@ import ../Runika/glyf.bend as G
 | `F.load(path)` | `IO(Result<&2,&2,String,F.Font>)`: reads and validates a font file. |
 | `F.parse(bytes)` | Validates a font from a byte `View`. |
 | `F.glyph_id(font, scalar)` | Glyph id for a Unicode scalar; `0` when the font has no mapping. |
+| `F.info(font, scalar)` | `Info{glyph, advance}`: glyph id and, for a present glyph, its advance (Latin-1 from the table). |
 | `F.metric(font, glyph)` | `Metric{advance, bearing}` from `hmtx`, in font units. |
+| `F.units`, `F.ascender`, `F.descender`, `F.line_gap`, `F.checksum` | Header values and the file's identity. |
 | `G.raw(font, glyph)` | Contours as lists of `RawPoint{x, y, on}`, composites expanded. |
 | `G.outline(font, glyph)` | The glyph as a closed Splina `Path`, in font units. |
 
@@ -109,9 +121,15 @@ and overlap between table regions are not audited. Runika is not a complete
 OpenType sanitizer, and the tests are evidence for the declared subset, not a
 proof of correct parsing for every font.
 
-The byte buffer is an immutable shared tree with logarithmic access, and a font
-is loaded once per program. There is no glyph cache yet, and no performance
-advantage over existing engines is claimed.
+Font bytes live in an immutable tree of 32-bit words (four bytes per leaf):
+an aligned `u32` read of Liberation Sans takes ~0.23 µs (it was ~1.8 µs with a
+byte per leaf), and loading the font ~20 ms. A native `Array<U32>` would read
+in ~1 ns, but Bend arrays are affine and a font is shared `Data`; see
+[docs/api.md](docs/api.md#byte-storage-and-performance) for the measurements
+and why fonts are passed boxed (one pointer). After the Latin-1 table and the
+callers' caches (Chromi's demo text), bytes are read when a font loads and
+when a glyph is rasterized for the first time. No performance advantage over
+existing engines is claimed.
 
 ## Test font
 
@@ -128,9 +146,9 @@ font may make the reference checks fail.
 
 | Path | Purpose |
 | --- | --- |
-| [font.bend](font.bend) | Table directory, `head`/`hhea`/`maxp`, `cmap`, `hmtx`, `loca`. |
+| [font.bend](font.bend) | Table directory, `head`/`hhea`/`maxp`, `cmap`, `hmtx`, `loca`, the Latin-1 table. |
 | [glyf.bend](glyf.bend) | Simple and composite glyphs, raw points, Splina outlines. |
-| [bytes.bend](bytes.bend) | Bounds-checked byte views and file loading. |
+| [bytes.bend](bytes.bend) | Bounds-checked byte views over a word tree, and file loading. |
 | [check.bend](check.bend) | Small test helpers, also used by sibling suites. |
 | [tests.bend](tests.bend), [test_support.bend](test_support.bend) | Native checks and synthetic font data. |
 | [examples/outline.bend](examples/outline.bend) | Loads a font and outlines one glyph. |
@@ -141,8 +159,8 @@ font may make the reference checks fail.
 ## Direction
 
 Next are `cmap` format 12 for scalars outside the BMP, kerning and the GPOS/GSUB
-data that Latin text needs, a glyph cache, and broader font coverage measured
-on real files. These are goals, not supported features.
+data that Latin text needs, and broader font coverage measured on real files.
+These are goals, not supported features.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development rules. The API is
 experimental and may change. Licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT), at your option.
