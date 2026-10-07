@@ -24,9 +24,6 @@ type Tree is Data:
 type View is Data:
   View{tree: Tree, half: U32, start: U32, length: U32}
 
-type Built is Data:
-  Built{tree: Tree, rest: List<&2, U32>}
-
 def require(ok: Bool, message: String) -> Result<&2, &2, String, Unit>:
   match ok:
     case True{}:
@@ -36,83 +33,74 @@ def require(ok: Bool, message: String) -> Result<&2, &2, String, Unit>:
 
 # Building
 # --------
+#
+# One pass consumes the byte list (it is never shared, so each cell is freed
+# as it is read): the bytes become word leaves, in order, ending with their
+# count and whether each was a byte; then each level pairs neighbours,
+# padding an odd end with a zero subtree, until one tree remains. The tree
+# is the complete tree of 2^d words a top-down build would make.
 
 def word4(+a: U32, +b: U32, +c: U32, +d: U32) -> U32:
   ((a << 24n) .|. (b << 16n) .|. (c << 8n) .|. d : U32)
 
-# The next word of xs (missing bytes are zero) and the bytes after it.
-def take_word(xs: List<&2, U32>) -> Built:
+type Leaves is Data:
+  More{leaf: Tree, rest: Leaves}
+  End{count: U32, bytes: Bool}
+
+def is_byte(+b: U32) -> Bool:
+  U32.is_le(b, 255)
+
+def leaves(xs: List<&2, U32>, +count: U32, +ok: Bool) -> Leaves:
   match xs:
-    case Con{a, Con{b, Con{c, Con{d, rest}}}}:
-      Built{Word{word4(a, b, c, d)}, rest}
-    case Con{a, Con{b, Con{c, Nil{}}}}:
-      Built{Word{word4(a, b, c, 0)}, Nil{}}
-    case Con{a, Con{b, Nil{}}}:
-      Built{Word{word4(a, b, 0, 0)}, Nil{}}
-    case Con{a, Nil{}}:
-      Built{Word{word4(a, 0, 0, 0)}, Nil{}}
+    case Con{+a, Con{+b, Con{+c, Con{+d, rest}}}}:
+      More{Word{word4(a, b, c, d)}, leaves(rest, (count + 4 : U32),
+        ok && is_byte(a) && is_byte(b) && is_byte(c) && is_byte(d))}
+    case Con{+a, Con{+b, Con{+c, Nil{}}}}:
+      More{Word{word4(a, b, c, 0)}, End{(count + 3 : U32), ok && is_byte(a) && is_byte(b) && is_byte(c)}}
+    case Con{+a, Con{+b, Nil{}}}:
+      More{Word{word4(a, b, 0, 0)}, End{(count + 2 : U32), ok && is_byte(a) && is_byte(b)}}
+    case Con{+a, Nil{}}:
+      More{Word{word4(a, 0, 0, 0)}, End{(count + 1 : U32), ok && is_byte(a)}}
     case Nil{}:
-      Built{Word{0}, Nil{}}
+      End{count, ok}
 
-def built_tree(r: Built) -> Tree:
+# One level up: neighbours become forks; an odd last tree gets `zero`.
+def pairs(ls: Leaves, +zero: Tree) -> Leaves:
+  match ls:
+    case More{a, More{b, rest}}:
+      More{Fork{a, b}, pairs(rest, zero)}
+    case More{a, End{n, ok}}:
+      More{Fork{a, zero}, End{n, ok}}
+    case End{n, ok}:
+      End{n, ok}
+
+type Built is Data:
+  Built{tree: Tree, half: U32, count: U32, bytes: Bool}
+
+# Pairs levels until one tree remains; `zero` is a zero subtree as tall as
+# this level's trees, and `half` the split of a tree one level up (so a
+# lone tree at this level splits at half / 2).
+def levels(n: Nat, ls: Leaves, +zero: Tree, +half: U32) -> Built:
+  match n ls:
+    case _ End{count, ok}:
+      Built{Word{0}, 0, count, ok}
+    case _ More{t, End{count, ok}}:
+      Built{t, (half >> 1n : U32), count, ok}
+    case 0n More{a, More{b, rest}}:
+      Built{Word{0}, 0, 0, False{}}
+    case 1n+p More{a, More{b, rest}}:
+      levels(p, pairs(More{a, More{b, rest}}, zero), Fork{zero, zero}, (half << 1n : U32))
+
+def checked(r: Built) -> Result<&2, &2, String, View>:
   match r:
-    case Built{tree, rest}:
-      tree
-
-def built_rest(r: Built) -> List<&2, U32>:
-  match r:
-    case Built{tree, rest}:
-      rest
-
-def build_finish(lo: Tree, r: Built) -> Built:
-  match r:
-    case Built{hi, tail}:
-      Built{Fork{lo, hi}, tail}
-
-# A complete tree of depth d over the next 4 * 2^d bytes of xs.
-def build(+d: Nat, xs: List<&2, U32>) -> Built:
-  match d:
-    case 0n:
-      take_word(xs)
-    case 1n+p:
-      +r = build(p, xs)
-      build_finish(built_tree(r), build(p, built_rest(r)))
-
-type Scan is Data:
-  Scan{count: U32, bytes: Bool}
-
-# The length of xs and whether every value is a byte, in one pass.
-def scan(xs: List<&2, U32>, +count: U32, +bytes: Bool) -> Scan:
-  match xs:
-    case Nil{}:
-      Scan{count, bytes}
-    case Con{h, t}:
-      scan(t, (count + 1 : U32), bytes && U32.is_le(h, 255))
-
-# Tree depth for n bytes: words = ceil(n / 4); depth = ceil(log2(words)).
-def depth_of(+n: U32) -> Nat:
-  +words = ((n + 3) >> 2n : U32)
-  Bool.pick(Nat, U32.is_le(words, 1), 0n, 1n+U32.log2((words - 1 : U32)))
-
-def half_of(+d: Nat) -> U32:
-  Bool.pick(U32, Nat.is_eq(d, 0n), 0, U32.shln(1, Nat.sub(d, 1n)))
-
-def view_build(+d: Nat, +n: U32, r: Built) -> View:
-  match r:
-    case Built{tree, rest}:
-      View{tree, half_of(d), 0, n}
-
-def from_scan(s: Scan, +xs: List<&2, U32>) -> Result<&2, &2, String, View>:
-  match s:
-    case Scan{+n, ok}:
+    case Built{tree, +half, +n, ok}:
       do Result<&2, &2, String, View>:
         size : Unit <- require(U32.is_le(n, 2097152), "font input exceeds 2 MiB limit")
         bytes : Unit <- require(ok, "input contains a value outside byte range")
-        +d : Nat = depth_of(n)
-        return view_build(d, n, build(d, xs))
+        return View{tree, half, 0, n}
 
-def from_bytes(+xs: List<&2, U32>) -> Result<&2, &2, String, View>:
-  from_scan(scan(xs, 0, True{}), xs)
+def from_bytes(xs: List<&2, U32>) -> Result<&2, &2, String, View>:
+  checked(levels(64n, leaves(xs, 0, True{}), Word{0}, 1))
 
 # Reading
 # -------

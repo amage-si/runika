@@ -115,8 +115,16 @@ pseudo-random aligned `u32` values (`--threads 2`, Ryzen 7 5800H):
 | Storage | Per read | Build |
 | --- | --- | --- |
 | Byte per leaf (Runika c2b4af9) | 1.7–1.9 µs | ~30 ms with the scan and validation |
-| Word per leaf (this version) | 0.20–0.26 µs | ~20 ms |
+| Word per leaf, top-down build (Runika 47a95f0) | 0.20–0.26 µs | 20–23 ms |
+| Word per leaf, one-pass build (this version) | 0.20–0.26 µs | 7–8 ms |
 | Native `Array<U32>` of the same words | ~1 ns | ~2 ms |
+
+The build consumes the byte list in one pass and never shares it: the
+bytes become word leaves in order, ending with their count and validity,
+and levels of pairs make the tree. The earlier build read the list twice
+(count and validity, then the tree) and shared its intermediate results,
+so every list cell went through reference counting; most of its time was
+freeing memory.
 
 Bend 2.0.35 compiles `Array<U32>` to a flat block with O(1) reads, so a flat
 array would be ~200 times faster per read. It is not used because an
@@ -126,10 +134,10 @@ values that Syllo, Dithra, Chromi, Mokko and Auvia copy freely and keep in
 their models; an array would make every font, every model holding one and
 every text call affine (`Array.fork` can share a block, but only between
 affine owners). After the Latin-1 table and the callers' caches, bytes are
-read only when a font loads (~20 ms, of which ~0.25 ms builds the table) and
-when a glyph is outlined for the first time: parsing an outline of Liberation
-Sans's printable ASCII takes ~0.1 ms per glyph (mostly the parser's own work,
-not the reads), and Dithra's 16 px rasterization adds ~0.02 ms.
+read only when a font loads (~7 ms with the file read, of which ~0.2 ms
+builds the table) and when a glyph is outlined for the first time: an
+outline of Liberation Sans's printable ASCII parses in ~13 µs, and Dithra's
+16 px rasterization of it takes ~70 µs more.
 
 Fonts are boxed. The compiler passes a record that is not recursive
 flattened, one word per field, through every call that carries it (a

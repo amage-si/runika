@@ -123,7 +123,7 @@ proof of correct parsing for every font.
 
 Font bytes live in an immutable tree of 32-bit words (four bytes per leaf):
 an aligned `u32` read of Liberation Sans takes ~0.23 µs (it was ~1.8 µs with a
-byte per leaf), and loading the font ~20 ms. A native `Array<U32>` would read
+byte per leaf), and loading the font ~7 ms (~30 ms before). A native `Array<U32>` would read
 in ~1 ns, but Bend arrays are affine and a font is shared `Data`; see
 [docs/api.md](docs/api.md#byte-storage-and-performance) for the measurements
 and why fonts are passed boxed (one pointer). After the Latin-1 table and the
