@@ -8,8 +8,10 @@ import ../Splina/path.bend as P
 
 def font_metrics(f: F.Font) -> Bool:
   match f:
-    case F.Font{upem, asc, desc, gap, count, metrics, long, cmap, hmtx, loca, glyf}:
+    case F.Font{upem, asc, desc, gap, count, metrics, long, cmap, hmtx, loca, glyf, sum, latin}:
       Bool.and(U32.is_eq(upem, 2048), Bool.and(C.near(asc, 1854.0), Bool.and(C.near(desc, F32.neg(434.0)), Bool.and(C.near(gap, 67.0), U32.is_eq(count, 2620)))))
+    case F.Alias{f}:
+      font_metrics(f)
 
 def metric_matches(m: F.Metric, a: F32, b: F32) -> Bool:
   match m:
@@ -68,8 +70,13 @@ def main() -> IO(Unit):
     fr : Result<&2, &2, String, F.Font> <- F.load("/usr/share/fonts/liberation/LiberationSans-Regular.ttf")
     +font : F.Font <- C.unwrap(F.Font, fr)
     C.expect(font_metrics(font), "fontTools header reference")
+    C.expect(U32.is_eq(F.checksum(font), 547706334), "font checksum is the head checkSumAdjustment")
+    C.expect(T.table_agrees(300n, font, 0), "Latin-1 table answers as the cmap and hmtx do (U+0000 to U+012B)")
+    C.expect(T.known_glyph(F.known(font, 65), 36) && U32.is_eq(T.known_count(256n, font, 0, 0), 256),
+      "Latin-1 table holds all 256 answers of a well-formed font")
     raw : Result<&2, &2, String, B.View> <- B.load("/usr/share/fonts/liberation/LiberationSans-Regular.ttf")
     C.expect(T.all_checksums(raw), "every table checksum matches the directory (all words read through the tree)")
+    C.expect(T.table_agrees(256n, T.with_cmap(font, T.cmap4(4,6)), 0), "a replaced cmap rebuilds the Latin-1 table")
     idrange : U32 <- C.unwrap(U32,F.glyph_id(T.with_cmap(font,T.cmap4(4,6)),65))
     C.expect(U32.is_eq(idrange,7), "cmap idRangeOffset applies delta to nonzero glyph")
     absent : U32 <- C.unwrap(U32,F.glyph_id(T.with_cmap(font,T.cmap4(4,0)),65))

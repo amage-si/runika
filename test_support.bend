@@ -20,8 +20,8 @@ def triangle() -> List<&2, U32>:
    0,0, 0,10, 255,246, 0,0, 0,0, 0,10]
 
 def synthetic(+data: B.View, loca: B.View) -> F.Font:
-  F.Font{1000, 800.0, F32.neg(200.0), 0.0, 2, 2, True{},
-    data, view([1,244,0,0, 1,244,0,0]), loca, data}
+  F.with_latin(F.Font{1000, 800.0, F32.neg(200.0), 0.0, 2, 2, True{},
+    data, view([1,244,0,0, 1,244,0,0]), loca, data, 0, F.Unknown{}})
 
 def raw_glyph(bytes: List<&2, U32>) -> Result<&2, &2, String, G.Glyph>:
   +v = view(bytes)
@@ -39,10 +39,13 @@ def cmap4(+range: U32, glyph: U32) -> B.View:
   view(append([0,4,0,34,0,0,0,4,0,4,0,1,0,0,
     0,65,255,255,0,0,0,65,255,255,0,1,0,1],append(be16(range),append([0,0],be16(glyph)))))
 
+# The font with another cmap; its Latin-1 table is rebuilt from it.
 def with_cmap(font: F.Font, cmap: B.View) -> F.Font:
   match font:
-    case F.Font{upem,asc,desc,gap,count,metrics,long,old,hmtx,loca,glyf}:
-      F.Font{upem,asc,desc,gap,count,metrics,long,cmap,hmtx,loca,glyf}
+    case F.Font{upem,asc,desc,gap,count,metrics,long,old,hmtx,loca,glyf,sum,latin}:
+      F.with_latin(F.Font{upem,asc,desc,gap,count,metrics,long,cmap,hmtx,loca,glyf,sum,F.Unknown{}})
+    case F.Alias{f}:
+      with_cmap(f, cmap)
 
 # Byte reads at every offset of a buffer of n bytes 0, 37, 74, ... (mod
 # 256) agree with the values they should read.
@@ -101,6 +104,34 @@ def slice_reads(r: Result<&2, &2, String, B.View>) -> Bool:
       ok_byte(B.u32(v, 0), (((at(5) * 256 + at(6)) * 256 + at(7)) * 256 + at(8) : U32)) &&
         ok_byte(B.u16(v, 5), (at(10) * 256 + at(11) : U32)) && failed(B.u16(v, 6)) && failed(B.byte(v, 7))
 
+def same_info(a: Result<&2, &2, String, F.Info>, b: Result<&2, &2, String, F.Info>) -> Bool:
+  match a b:
+    case Done{F.Info{ga, aa}} Done{F.Info{gb, ab}}:
+      U32.is_eq(ga, gb) && F32.is_eq(aa, ab)
+    case Fail{ea} Fail{eb}:
+      String.eq(ea, eb)
+    case _ _:
+      False{}
+
+def same_gid(a: Result<&2, &2, String, U32>, b: Result<&2, &2, String, U32>) -> Bool:
+  match a b:
+    case Done{x} Done{y}:
+      U32.is_eq(x, y)
+    case Fail{ea} Fail{eb}:
+      String.eq(ea, eb)
+    case _ _:
+      False{}
+
+# For codes i .. i + k - 1: the Latin-1 table (info, glyph_id) answers
+# exactly what the cmap and hmtx tables answer.
+def table_agrees(k: Nat, +font: F.Font, +i: U32) -> Bool:
+  match k:
+    case 0n:
+      True{}
+    case 1n+p:
+      same_info(F.info(font, i), F.info.read(font, i)) && same_gid(F.glyph_id(font, i), F.glyph_id.read(font, i)) &&
+        table_agrees(p, font, (i + 1 : U32))
+
 # Table checksums (the sum of a table's big-endian words, the bytes past its
 # end counting as zero; head without its checkSumAdjustment) against the
 # directory: every word of every table read through the byte tree.
@@ -144,3 +175,17 @@ def all_checksums(r: Result<&2, &2, String, B.View>) -> Bool:
     case Done{+v}:
       +n = Result.default(&2, &2, String, U32, B.u16(v, 4), 0)
       U32.is_gt(n, 0) && checksums(U32.to_nat(n), v, 0)
+
+def known_glyph(m: Maybe<&2, F.Info>, +gid: U32) -> Bool:
+  match m:
+    case Some{F.Info{g, a}}:
+      U32.is_eq(g, gid)
+    case None{}:
+      False{}
+
+def known_count(k: Nat, +font: F.Font, +i: U32, +acc: U32) -> U32:
+  match k:
+    case 0n:
+      acc
+    case 1n+p:
+      known_count(p, font, (i + 1 : U32), (acc + Bool.to_u32(Maybe.is_some(&2, F.Info, F.known(font, i))) : U32))
