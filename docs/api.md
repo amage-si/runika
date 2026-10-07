@@ -126,8 +126,10 @@ values that Syllo, Dithra, Chromi, Mokko and Auvia copy freely and keep in
 their models; an array would make every font, every model holding one and
 every text call affine (`Array.fork` can share a block, but only between
 affine owners). After the Latin-1 table and the callers' caches, bytes are
-read only when a font loads (~20 ms, and ~0.5 ms for the table) and when a
-glyph is rasterized for the first time (~50 µs of reads per glyph).
+read only when a font loads (~20 ms, of which ~0.25 ms builds the table) and
+when a glyph is outlined for the first time: parsing an outline of Liberation
+Sans's printable ASCII takes ~0.1 ms per glyph (mostly the parser's own work,
+not the reads), and Dithra's 16 px rasterization adds ~0.02 ms.
 
 Fonts are boxed. The compiler passes a record that is not recursive
 flattened, one word per field, through every call that carries it (a
