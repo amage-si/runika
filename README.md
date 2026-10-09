@@ -33,16 +33,22 @@ on the development machine. It is not a complete OpenType implementation.
   parse time. `F.info` and `F.glyph_id` answer those characters in eight steps
   instead of a `cmap` search and an `hmtx` read, with the same results and
   errors (a character the font could not answer goes through the tables).
+- Every other BMP character through a binary search over the `cmap` format 4
+  segments (seven reads for Liberation Sans's 94 segments) and one `hmtx`
+  read, matched rather than bound per read: ~0.75 µs per character in
+  Liberation Sans for € or Ж (~11 µs and ~3.4 µs with the previous linear
+  scan), against ~0.03 µs for a Latin-1 character from the table.
 - The file's identity (`head` checkSumAdjustment) for caches of derived data.
 
-The native suite has **58 checks**: truncated and out-of-range input, offset
+The native suite has **60 checks**: truncated and out-of-range input, offset
 and slice overflow, every byte/u16/u32 read at every offset and alignment of
 small buffers, every table checksum of Liberation Sans against its directory
 (each word of the file read through the byte tree), malformed directories and
 `loca`, flag repeats, composite cycles, signed composite arguments with
 F2Dot14 scale, `cmap` glyph-array edge cases, the Latin-1 table answering
 exactly as the tables do (U+0000 to U+012B), its rebuild after a `cmap` is
-replaced, and reference values from Liberation Sans.
+replaced, the binary search answering as the linear scan for every BMP code
+of Liberation Sans, and reference values from Liberation Sans.
 
 Outside the suite, `tools/` compares Runika against **fontTools 4.66.1**: all
 191 characters of ASCII 32–126 and Latin-1 160–255 in Liberation Sans

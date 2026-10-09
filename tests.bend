@@ -74,6 +74,8 @@ def main() -> IO(Unit):
     C.expect(T.table_agrees(300n, font, 0), "Latin-1 table answers as the cmap and hmtx do (U+0000 to U+012B)")
     C.expect(T.known_glyph(F.known(font, 65), 36) && U32.is_eq(T.known_count(256n, font, 0, 0), 256),
       "Latin-1 table holds all 256 answers of a well-formed font")
+    C.expect(T.search_agrees(font), "cmap binary search answers as the linear scan on every BMP code (U+0000 to U+FFFF)")
+    C.expect(T.search_agrees(T.with_cmap(font, T.cmap4(4,6))), "cmap binary search agrees on a two-segment cmap")
     raw : Result<&2, &2, String, B.View> <- B.load("/usr/share/fonts/liberation/LiberationSans-Regular.ttf")
     C.expect(T.all_checksums(raw), "every table checksum matches the directory (all words read through the tree)")
     C.expect(T.table_agrees(256n, T.with_cmap(font, T.cmap4(4,6)), 0), "a replaced cmap rebuilds the Latin-1 table")

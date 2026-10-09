@@ -137,14 +137,20 @@ def cmap_parse(+v: B.View) -> Result<&2, &2, String, B.View>:
     sub : Maybe<&2, B.View> <- cmap_records(U32.to_nat(n), v, 4)
     cmap_selected(sub)
 
+# A glyph-array entry: 0 stays 0 (no glyph), anything else gets the delta.
+def cmap_array(r: Result<&2, &2, String, U32>, +delta: U32) -> Result<&2, &2, String, U32>:
+  match r:
+    case Fail{e}:
+      Fail{e}
+    case Done{+raw}:
+      Done{Bool.pick(U32, U32.is_eq(raw, 0), 0, U32.and((raw + delta : U32), 65535))}
+
 def cmap_glyph(direct: Bool, +v: B.View, +code: U32, start: U32, delta: U32, range: U32, at: U32) -> Result<&2, &2, String, U32>:
   match direct:
     case True{}:
       Done{U32.and((code + delta : U32), 65535)}
     case False{}:
-      do Result<&2, &2, String, U32>:
-        +raw : U32 <- B.u16(v, (at + range + ((code - start) * 2) : U32))
-        return Bool.pick(U32, U32.is_eq(raw, 0), 0, U32.and((raw + delta : U32), 65535))
+      cmap_array(B.u16(v, (at + range + ((code - start) * 2) : U32)), delta)
 
 def cmap_hit(hit: Bool, +v: B.View, code: U32, start: U32, delta: U32, +range: U32, at: U32, tail: U32) -> Result<&2, &2, String, U32>:
   match hit:
@@ -155,13 +161,24 @@ def cmap_hit(hit: Bool, +v: B.View, code: U32, start: U32, delta: U32, +range: U
 
 # The glyph of `code` in segment i, or 0 when the segment starts after it
 # (code falls between segments).
+# The segment's start, delta and range offset are read in that order: the
+# first failed read is the error (no closure per read).
+def cmap_fields(s: Result<&2, &2, String, U32>, d: Result<&2, &2, String, U32>, r: Result<&2, &2, String, U32>,
+  +v: B.View, +at: U32, +code: U32) -> Result<&2, &2, String, U32>:
+  match s d r:
+    case Fail{e} _ _:
+      Fail{e}
+    case Done{x} Fail{e} _:
+      Fail{e}
+    case Done{x} Done{y} Fail{e}:
+      Fail{e}
+    case Done{+start} Done{delta} Done{range}:
+      cmap_hit(U32.is_le(start, code), v, code, start, delta, range, at, 0)
+
 def cmap_segment(+v: B.View, +count: U32, +i: U32, +code: U32) -> Result<&2, &2, String, U32>:
-  do Result<&2, &2, String, U32>:
-    +start : U32 <- B.u16(v, (16 + (count * 2) + (i * 2) : U32))
-    delta : U32 <- B.u16(v, (16 + (count * 4) + (i * 2) : U32))
-    +at : U32 = (16 + (count * 6) + (i * 2) : U32)
-    range : U32 <- B.u16(v, at)
-    cmap_hit(U32.is_le(start, code), v, code, start, delta, range, at, 0)
+  +at = (16 + (count * 6) + (i * 2) : U32)
+  cmap_fields(B.u16(v, (16 + (count * 2) + (i * 2) : U32)), B.u16(v, (16 + (count * 4) + (i * 2) : U32)),
+    B.u16(v, at), v, at, code)
 
 def cmap_next(here: Bool, found: Unit -> Result<&2, &2, String, U32>,
   later: Unit -> Result<&2, &2, String, U32>) -> Result<&2, &2, String, U32>:
@@ -173,7 +190,8 @@ def cmap_next(here: Bool, found: Unit -> Result<&2, &2, String, U32>,
 
 # Segments are sorted by end and do not overlap (cmap_validate checks it
 # when the font is loaded), so the segment for `code` is the first one that
-# ends at or after it: stop there instead of reading every segment.
+# ends at or after it. This linear scan is the reference `cmap_search` is
+# checked against (Runika's tests, every BMP code of Liberation Sans).
 def cmap_scan(n: Nat, +v: B.View, +count: U32, +i: U32, +code: U32) -> Result<&2, &2, String, U32>:
   match n:
     case 0n:
@@ -184,28 +202,106 @@ def cmap_scan(n: Nat, +v: B.View, +count: U32, +i: U32, +code: U32) -> Result<&2
         cmap_next(U32.is_ge(end, code), u => cmap_segment(v, count, i, code),
           u => cmap_scan(p, v, count, (i + 1 : U32), code))
 
-# The glyph of `code` read from the cmap (not from the Latin-1 table).
+def cmap_end(r: Result<&2, &2, String, U32>) -> U32:
+  match r:
+    case Fail{e}:
+      0
+    case Done{end}:
+      end
+
+# The index of the first segment in [lo, hi) that ends at or after `code`
+# (hi when none does): a binary search over the sorted ends, about seven
+# reads for a hundred segments instead of one closure and read per segment
+# before it. `n` bounds the depth (a format 4 table has under 2^15
+# segments). An end that cannot be read counts as before `code`; a
+# validated cmap has none.
+def cmap_search(n: Nat, more: Bool, +v: B.View, +lo: U32, +hi: U32, +code: U32) -> U32:
+  match n more:
+    case 0n _:
+      lo
+    case 1n+p False{}:
+      lo
+    case 1n+p True{}:
+      +mid = ((lo + hi) >> 1n : U32)
+      +left = U32.is_ge(cmap_end(B.u16(v, (14 + (mid * 2) : U32))), code)
+      +lo2 = Bool.pick(U32, left, lo, (mid + 1 : U32))
+      +hi2 = Bool.pick(U32, left, mid, hi)
+      cmap_search(p, U32.is_lt(lo2, hi2), v, lo2, hi2, code)
+
+def cmap_found(here: Bool, +v: B.View, +count: U32, +i: U32, +code: U32) -> Result<&2, &2, String, U32>:
+  match here:
+    case False{}:
+      Done{0}
+    case True{}:
+      cmap_segment(v, count, i, code)
+
+# The glyph of `code` in a validated format 4 subtable with `count`
+# segments: the same answer as `cmap_scan`.
+def cmap_lookup(+v: B.View, +count: U32, +code: U32) -> Result<&2, &2, String, U32>:
+  +i = cmap_search(16n, U32.is_gt(count, 0), v, 0, count, code)
+  cmap_found(U32.is_lt(i, count), v, count, i, code)
+
+def glyph_id.bound(inside: Bool, +gid: U32) -> Result<&2, &2, String, U32>:
+  match inside:
+    case True{}:
+      Done{gid}
+    case False{}:
+      Fail{"cmap glyph id outside maxp"}
+
+def glyph_id.found(r: Result<&2, &2, String, U32>, +count: U32) -> Result<&2, &2, String, U32>:
+  match r:
+    case Fail{e}:
+      Fail{e}
+    case Done{+gid}:
+      glyph_id.bound(U32.is_lt(gid, count), gid)
+
+def glyph_id.segments(r: Result<&2, &2, String, U32>, +cmap: B.View, +count: U32, +code: U32) -> Result<&2, &2, String, U32>:
+  match r:
+    case Fail{e}:
+      Fail{e}
+    case Done{+seg2}:
+      glyph_id.found(cmap_lookup(cmap, (seg2 / 2 : U32), code), count)
+
+def glyph_id.bmp(ok: Bool, +cmap: B.View, +count: U32, +code: U32) -> Result<&2, &2, String, U32>:
+  match ok:
+    case False{}:
+      Fail{"cmap4 supports Unicode BMP scalar values only"}
+    case True{}:
+      glyph_id.segments(B.u16(cmap, 6), cmap, count, code)
+
+# The glyph of `code` read from the cmap (not from the Latin-1 table). The
+# checks run in turn, each a match rather than a bind: a BMP scalar, the
+# segment count, the search, and a glyph id inside maxp.
 def glyph_id.read(font: Font, +code: U32) -> Result<&2, &2, String, U32>:
   match font:
-    case Font{upem, asc, desc, gap, count, metrics, long, +cmap, hmtx, loca, glyf, sum, latin}:
-      do Result<&2, &2, String, U32>:
-        ok : Unit <- B.require(Bool.and(U32.is_le(code, 65535), Bool.not(Bool.and(U32.is_ge(code, 55296), U32.is_le(code, 57343)))), "cmap4 supports Unicode BMP scalar values only")
-        seg2 : U32 <- B.u16(cmap, 6)
-        +segs : U32 = (seg2 / 2 : U32)
-        +gid : U32 <- cmap_scan(U32.to_nat(segs), cmap, segs, 0, code)
-        ok2 : Unit <- B.require(U32.is_lt(gid, count), "cmap glyph id outside maxp")
-        return gid
+    case Font{upem, asc, desc, gap, +count, metrics, long, +cmap, hmtx, loca, glyf, sum, latin}:
+      glyph_id.bmp(U32.is_le(code, 65535) && Bool.not(U32.is_ge(code, 55296) && U32.is_le(code, 57343)), cmap, count, code)
     case Alias{f}:
       glyph_id.read(f, code)
 
+def metric.pair(a: Result<&2, &2, String, U32>, l: Result<&2, &2, String, F32>) -> Result<&2, &2, String, Metric>:
+  match a l:
+    case Fail{e} _:
+      Fail{e}
+    case Done{x} Fail{e}:
+      Fail{e}
+    case Done{adv} Done{lsb}:
+      Done{Metric{U32.to_f32(adv), lsb}}
+
+def metric.of(inside: Bool, +hmtx: B.View, +metrics: U32, +gid: U32) -> Result<&2, &2, String, Metric>:
+  match inside:
+    case False{}:
+      Fail{"glyph id outside maxp"}
+    case True{}:
+      metric.pair(B.u16(hmtx, (U32.min(gid, (metrics - 1 : U32)) * 4 : U32)),
+        B.i16(hmtx, Bool.pick(U32, U32.is_lt(gid, metrics), ((gid * 4) + 2 : U32), ((metrics * 4) + ((gid - metrics) * 2) : U32))))
+
+# A glyph's advance and left side bearing from hmtx (the advance, then the
+# bearing, is read; the first failure is the error).
 def metric(font: Font, +gid: U32) -> Result<&2, &2, String, Metric>:
   match font:
-    case Font{upem, asc, desc, gap, count, +metrics, long, cmap, +hmtx, loca, glyf, sum, latin}:
-      do Result<&2, &2, String, Metric>:
-        ok : Unit <- B.require(U32.is_lt(gid, count), "glyph id outside maxp")
-        adv : U32 <- B.u16(hmtx, (U32.min(gid, (metrics - 1 : U32)) * 4 : U32))
-        lsb : F32 <- B.i16(hmtx, Bool.pick(U32, U32.is_lt(gid, metrics), ((gid * 4) + 2 : U32), ((metrics * 4) + ((gid - metrics) * 2) : U32)))
-        return Metric{U32.to_f32(adv), lsb}
+    case Font{upem, asc, desc, gap, +count, +metrics, long, cmap, +hmtx, loca, glyf, sum, latin}:
+      metric.of(U32.is_lt(gid, count), hmtx, metrics, gid)
     case Alias{f}:
       metric(f, gid)
 

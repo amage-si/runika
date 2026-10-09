@@ -132,6 +132,29 @@ def table_agrees(k: Nat, +font: F.Font, +i: U32) -> Bool:
       same_info(F.info(font, i), F.info.read(font, i)) && same_gid(F.glyph_id(font, i), F.glyph_id.read(font, i)) &&
         table_agrees(p, font, (i + 1 : U32))
 
+def cmap_of(font: F.Font) -> B.View:
+  match font:
+    case F.Font{upem, asc, desc, gap, count, metrics, long, cmap, hmtx, loca, glyf, sum, latin}:
+      cmap
+    case F.Alias{f}:
+      cmap_of(f)
+
+# How many codes i .. i + k - 1 the binary search (`cmap_lookup`) answers
+# differently from the linear reference (`cmap_scan`), errors included.
+def search_differs(k: Nat, +v: B.View, +segs: U32, +i: U32, +acc: U32) -> U32:
+  match k:
+    case 0n:
+      acc
+    case 1n+p:
+      +ok = same_gid(F.cmap_lookup(v, segs, i), F.cmap_scan(U32.to_nat(segs), v, segs, 0, i))
+      search_differs(p, v, segs, (i + 1 : U32), (acc + Bool.to_u32(Bool.not(ok)) : U32))
+
+# The binary search agrees with the linear scan on every BMP code.
+def search_agrees(+font: F.Font) -> Bool:
+  +v = cmap_of(font)
+  +segs = (Result.default(&2, &2, String, U32, B.u16(v, 6), 0) / 2 : U32)
+  U32.is_gt(segs, 0) && U32.is_eq(search_differs(65536n, v, segs, 0, 0), 0)
+
 # Table checksums (the sum of a table's big-endian words, the bytes past its
 # end counting as zero; head without its checkSumAdjustment) against the
 # directory: every word of every table read through the byte tree.
