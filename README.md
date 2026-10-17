@@ -8,7 +8,7 @@ metrics and outlines in font units. The parsers are written in Bend 2; they do
 not call FreeType, HarfBuzz, Skia, or any other font engine, and there is no
 hand-written native code.
 
-**Status:** early Linux implementation, tested with **Bend 2.0.35**. It reads a
+**Status:** early Linux implementation, tested with **Bend 2.0.37**. It reads a
 documented subset of TrueType, enough for Latin text with the fonts installed
 on the development machine. It is not a complete OpenType implementation.
 
